@@ -21,9 +21,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
+from typing import Dict, Union, Any, Tuple, Optional
+
+from discord.ext import commands
 
 import discord.abc
 import discord.utils
+from discord.ext.commands.errors import FlagError
 import re
 
 __all__ = (
@@ -101,6 +105,7 @@ class Context(discord.abc.Messageable):
         self.command_failed = attrs.pop('command_failed', False)
         self.current_parameter = attrs.pop('current_parameter', None)
         self._state = self.message._state
+        self.flags: Dict[str, Optional[Any]] = {}
 
     async def invoke(self, command, /, *args, **kwargs):
         r"""|coro|
@@ -143,7 +148,47 @@ class Context(discord.abc.Messageable):
         ret = await command.callback(*arguments, **kwargs)
         return ret
 
-    async def reinvoke(self, *, call_hooks: bool = False, restart: bool = True):
+    async def parse_flags(self, flags: str, supported: Dict[str, Tuple[Union[type, None], str]]) -> Dict[str, Any]:
+        if not flags:
+            return {}
+        valid_flags = {}
+        split = flags.split(" ")
+        while split:
+            current_flag = split.pop(0)
+            if not current_flag:
+                continue
+            if not current_flag.startswith("--"):
+                raise commands.BadArgument(f"Flags must begin with `--`")
+            current_flag = current_flag[2:]
+            if current_flag not in supported:
+                raise FlagError(attempted=current_flag, supported=supported.keys())
+            if supported[current_flag][0] is None:
+                valid_flags[current_flag] = None
+                continue
+            value = split.pop(0)
+            if supported[current_flag][0] is discord.Role:
+                try:
+                    converted = await commands.RoleConverter().convert(self, value)
+                except commands.RoleNotFound:
+                    raise commands.CommandError(f"Role `{value}` not found from flag `{current_flag}`")
+                valid_flags[current_flag] = converted
+            elif supported[current_flag][0] is discord.Member:
+                try:
+                    converted = await commands.MemberConverter().convert(self, value)
+                except commands.MemberNotFound:
+                    raise commands.CommandError(f"Member `{value}` not found from flag `{current_flag}`")
+                valid_flags[current_flag] = converted
+            elif supported[current_flag][0] is int:
+                try:
+                    converted = int(value)
+                except ValueError:
+                    raise commands.CommandError(f"`{value}` is an invalid integer")
+                valid_flags[current_flag] = converted
+            else:
+                raise NotImplementedError(f"Type {supported[current_flag][0].__name__} not implemented")
+        return valid_flags
+
+    async def reinvoke(self, *, call_hooks=False, restart=True):
         """|coro|
 
         Calls the command again.
