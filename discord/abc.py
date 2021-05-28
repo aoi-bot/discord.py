@@ -704,6 +704,10 @@ class GuildChannel:
 
         You must have the :attr:`~discord.Permissions.manage_roles` permission to use this.
 
+        .. note::
+
+            This method *replaces* the old overwrites with the ones given.
+
         Examples
         ----------
 
@@ -1150,7 +1154,7 @@ class Messageable(Protocol):
     async def send(self, content=None, *, tts=False, embed=None, file=None,
                                           files=None, delete_after=None, nonce=None,
                                           allowed_mentions=None, reference=None,
-                                          mention_author=None):
+                                          mention_author=None, view=None):
         """|coro|
 
         Sends a message to the destination with the content given.
@@ -1208,6 +1212,10 @@ class Messageable(Protocol):
             If set, overrides the :attr:`~discord.AllowedMentions.replied_user` attribute of ``allowed_mentions``.
 
             .. versionadded:: 1.6
+        view: :class:`discord.ui.View`
+            A Discord UI View to add to the message.
+
+            .. versionadded:: 2.0
 
         Raises
         --------
@@ -1251,6 +1259,14 @@ class Messageable(Protocol):
             except AttributeError:
                 raise InvalidArgument('reference parameter must be Message or MessageReference') from None
 
+        if view:
+            if not hasattr(view, '__discord_ui_view__'):
+                raise InvalidArgument(f'view parameter must be View not {view.__class__!r}')
+
+            components = view.to_components()
+        else:
+            components = None
+
         if file is not None and files is not None:
             raise InvalidArgument('cannot pass both file and files parameter to send()')
 
@@ -1261,7 +1277,7 @@ class Messageable(Protocol):
             try:
                 data = await state.http.send_files(channel.id, files=[file], allowed_mentions=allowed_mentions,
                                                    content=content, tts=tts, embed=embed, nonce=nonce,
-                                                   message_reference=reference)
+                                                   message_reference=reference, components=components)
             finally:
                 file.close()
 
@@ -1274,16 +1290,19 @@ class Messageable(Protocol):
             try:
                 data = await state.http.send_files(channel.id, files=files, content=content, tts=tts,
                                                    embed=embed, nonce=nonce, allowed_mentions=allowed_mentions,
-                                                   message_reference=reference)
+                                                   message_reference=reference, components=components)
             finally:
                 for f in files:
                     f.close()
         else:
             data = await state.http.send_message(channel.id, content, tts=tts, embed=embed,
                                                  nonce=nonce, allowed_mentions=allowed_mentions,
-                                                 message_reference=reference)
+                                                 message_reference=reference, components=components)
 
         ret = state.create_message(channel=channel, data=data)
+        if view:
+            state.store_view(view, ret.id)
+
         if delete_after is not None:
             await ret.delete(delay=delete_after)
         return ret
@@ -1310,10 +1329,11 @@ class Messageable(Protocol):
             This means that both ``with`` and ``async with`` work with this.
 
         Example Usage: ::
+            async with channel.typing(): 
+                # simulate something heavy 
+                await asyncio.sleep(10)
 
-            async with channel.typing():
-                # do expensive stuff here
-                await channel.send('done!')
+            await channel.send('done!')
 
         """
         return Typing(self)
